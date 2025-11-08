@@ -97,10 +97,14 @@ if not st.session_state.active_dataset and upload is None:
     st.info("Upload a CSV in the sidebar, then ask your question (e.g., 'overview', 'numeric summary', 'plot price histogram').")
 
 # --------------------- Chat history -------------------------
+# Get non-tool messages for display
+non_tool_messages = [m for m in st.session_state.messages if m.get("role") != "tool"]
+
 for i, m in enumerate(st.session_state.messages):
     # Skip tool messages in main chat - they're only shown in the Tool Usage expander
     if m["role"] == "tool":
         continue
+    
     
     with st.chat_message(m["role"]):
         # Check if there's a plot associated with this assistant message
@@ -197,23 +201,38 @@ user_input = st.chat_input(
 )
 
 if user_input:
-    # Add user message first and display it immediately
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    # Display user message
-    with st.chat_message("user"):
-        st.markdown(user_input)
+    # Check if this exact input was already processed in this session
+    # Use a set to track processed inputs to avoid duplicates
+    if "processed_inputs" not in st.session_state:
+        st.session_state.processed_inputs = set()
     
-    # Now process with agent
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking…"):
-            try:
-                # Collect all chunks first
-                chunks = list(st.session_state.agent.run(st.session_state.messages))
-            except Exception as e:
-                st.error(f"Unexpected error: {e}")
-                import traceback
-                st.code(traceback.format_exc())
-                chunks = []  # Set empty chunks to avoid errors below  
+    # Create a unique key for this input (input text + current message count to handle same question asked twice)
+    input_key = f"{user_input}_{len(st.session_state.messages)}"
+    
+    if input_key not in st.session_state.processed_inputs:
+        # Mark as processed
+        st.session_state.processed_inputs.add(input_key)
+        
+        # Add user message
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        
+        # Display user message
+        with st.chat_message("user"):
+            st.markdown(user_input)
+        
+        # Now process with agent
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking…"):
+                try:
+                    # Collect all chunks first
+                    chunks = list(st.session_state.agent.run(st.session_state.messages))
+                except Exception as e:
+                    st.error(f"Unexpected error: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+                    chunks = []  # Set empty chunks to avoid errors below
+                finally:
+                    pass  # Processing complete  
         
         # Display tool calls (optional, can be collapsed) - OUTSIDE spinner
         try:

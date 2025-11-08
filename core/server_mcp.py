@@ -81,9 +81,11 @@ def plot_column(column: str, kind: str = "auto", y: str | None = None, group_by:
     try:
         di = _require_inspector()
         out = di.plot_column(column, kind=kind, y=y, group_by=group_by, bins=bins)
-        return {"path": out}
-    except (RuntimeError, ValueError) as e:
-        return {"error": str(e), "path": None}
+        return {"path": out, "column": column, "kind": kind, "y": y}
+    except Exception as e:
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        return {"error": error_msg, "path": None, "column": column, "kind": kind, "y": y}
 
 @mcp.tool()
 def correlation_matrix(method: str = "pearson", threshold: float = 0.5) -> dict:

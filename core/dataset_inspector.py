@@ -83,14 +83,21 @@ class DatasetInspector:
             # Get stats from describe() which uses ALL data
             stats[col] = {r: float(desc.loc[r, col]) for r in rows if r in desc.index}
             
-            # Double-check max/min using direct calculation to ensure accuracy
+            # CRITICAL: Double-check max/min using direct calculation to ensure accuracy
+            # This ensures we get the exact maximum and minimum values from the actual data
             actual_max = float(col_data.max())
             actual_min = float(col_data.min())
-            # Ensure we're using the actual values
+            # Verify we're using all non-null values
+            non_null_count = len(col_data)
+            
+            # Ensure we're using the actual values - override any potential rounding from describe()
             if "max" in stats[col]:
                 stats[col]["max"] = actual_max
             if "min" in stats[col]:
                 stats[col]["min"] = actual_min
+            # Update count to reflect actual non-null values
+            if "count" in stats[col]:
+                stats[col]["count"] = float(non_null_count)
             
             # Add skewness and kurtosis
             stats[col]["skewness"] = float(col_data.skew())
@@ -413,7 +420,11 @@ class DatasetInspector:
         plots_dir = self.project_root / "plots"
         plots_dir.mkdir(exist_ok=True)
         suffix = f"_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        out_path = plots_dir / f"{column}_{kind}{suffix}.png"
+        # For scatter plots, include y column in filename
+        if kind == "scatter" and y:
+            out_path = plots_dir / f"{column}_vs_{y}_{kind}{suffix}.png"
+        else:
+            out_path = plots_dir / f"{column}_{kind}{suffix}.png"
 
         if kind == "hist":
             if not pd.api.types.is_numeric_dtype(s):

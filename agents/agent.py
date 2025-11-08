@@ -5,52 +5,41 @@ from typing import Dict, Iterable, Any
 
 # Simplified, less rigid system prompt
 SYSTEM_DECIDE = (
-    "You are a helpful data analyst. Use tools to answer questions about the dataset.\n\n"
-    "TOOLS:\n"
-    "- get_data_overview(): Dataset overview\n"
+    "You are a data analyst. Use the available tools to answer questions about the dataset.\n\n"
+    "Available tools:\n"
     "- list_columns(): Get column names and types\n"
+    "- get_data_overview(): Dataset overview\n"
     "- summary_stats(): Statistics for numeric columns\n"
-    "- get_column_summary(column='Name'): Details about one column\n"
-    "- plot_column(column='X', kind='auto|hist|bar|scatter', y='Y'): Create plots\n"
-    "  * For 'X vs Y', 'X/Y relation', 'relationship between X and Y': Use plot_column(column='X', kind='scatter', y='Y')\n"
-    "  * For counts of categories: Use kind='bar'\n"
-    "  * For single numeric column: Use kind='hist' or 'auto'\n"
-    "- plot_correlation_matrix(): Correlation heatmap\n"
-    "- get_data_sample(n=10): Show sample rows\n"
-    "- group_by_stats(group_by='X', column='Y'): Stats grouped by category\n"
+    "- get_column_summary(column='Name'): Details about a specific column (shows top values for categorical columns)\n"
+    "- group_by_stats(group_by='Category', column='Numeric'): Get statistics grouped by category (e.g., average salary by job title)\n"
+    "- correlation_matrix(): Get correlation between all numeric columns\n"
+    "- plot_correlation_matrix(): Create correlation heatmap\n"
+    "- plot_column(column='X', kind='scatter', y='Y'): Create scatter plot for 'X vs Y'\n"
+    "- plot_column(column='X', kind='bar'): Create bar chart for category counts\n"
+    "- plot_column(column='X', kind='hist'): Create histogram for numeric distributions\n"
     "\n"
-    "GUIDELINES:\n"
-    "- Call tools to get data, don't assume\n"
-    "- Don't call the same tool twice with same arguments\n"
-    "- For plotting requests, call plot_column once with the right parameters\n"
-    "- For 'X vs Y' or 'X/Y relation', use scatter plot: plot_column(column='X', kind='scatter', y='Y')\n"
-    "- If you have enough data to answer, return null/empty JSON\n"
+    "When to use each tool:\n"
+    "- Questions about 'highest paying job', 'average salary by job', 'salary by category' → group_by_stats(group_by='Job_Title', column='Salary_USD')\n"
+    "- Questions about 'correlation', 'correlated features', 'top correlated', 'most contributing factor' → correlation_matrix() (call this to get correlation data)\n"
+    "- Questions about 'plot correlation' or 'visualize correlation' → plot_correlation_matrix() (creates plot AND provides correlation data)\n"
+    "- Questions about 'most common X' or 'top X values' → get_column_summary(column='X')\n"
+    "- Questions about 'plot X vs Y' → plot_column(column='X', kind='scatter', y='Y')\n"
     "\n"
-    "Output JSON: "
-    '{"tool_call":{"name":"tool_name", "args":{...}}} or null if done.'
+    "Important: If user asks about correlations but doesn't ask for a plot, call correlation_matrix() to get the data."
+    "\n"
+    "When you have enough information to answer, return null.\n"
+    "Output JSON: {\"tool_call\":{\"name\":\"tool_name\",\"args\":{...}}} or null"
 )
 
 SYSTEM_CHAT = (
-    "You are a professional data analyst. Provide clear, concise insights based on the data provided.\n\n"
-    "RULES:\n"
-    "1. Use ONLY the exact data provided - cite specific numbers and column names. Use the EXACT values from tool results.\n"
-    "2. CRITICAL: If summary_stats shows max=148694, use $148,694 (not $81,000). Always use the exact numbers from the tool results.\n"
-    "3. Never mention tools, JSON, or technical details.\n"
-    "4. Be concise - only mention details relevant to the question asked.\n"
-    "5. For 'facts' or 'overview' questions, provide analytical insights (averages, most common, highest/lowest).\n"
-    "6. Format numbers professionally (e.g., '$148,694' not '148694').\n"
-    "7. If a visualization was created, mention it briefly only if relevant to the question.\n"
-    "8. DO NOT mention correlation analysis, statistical details, or technical observations unless specifically asked.\n"
-    "9. For correlation analysis: Ignore diagonal values (1.0 self-correlations). Only analyze correlations between different variables.\n\n"
-    "STYLE:\n"
-    "- Be concise and direct - answer what was asked, nothing more.\n"
-    "- State insights directly using EXACT values from the data (e.g., 'The highest salary is $148,694' not 'I found that...').\n"
-    "- For 'facts' questions, provide interesting analytical facts like:\n"
-    "  * 'The most common job title is X with Y employees'\n"
-    "  * 'The highest paying position is X with an average of $Y'\n"
-    "  * 'Salary ranges from $X to $Y with an average of $Z'\n"
-    "- Only mention correlations, distributions, or statistical details if the question specifically asks for them.\n"
-    "- When analyzing correlations, ignore self-correlations (diagonal 1.0 values).\n"
+    "You are a helpful data analyst. Answer questions based on the tool results provided.\n\n"
+    "Guidelines:\n"
+    "- Use the exact values shown in the tool results\n"
+    "- Focus on what the user asked - stay relevant to their question\n"
+    "- If data isn't in the tool results, you don't have that information\n"
+    "- For plot requests, simply confirm the plot was created\n"
+    "- Format numbers clearly (e.g., $149,724)\n"
+    "- Be concise and natural in your responses\n"
 )
 
 TOOLCALL_RE = re.compile(r'\{\s*"tool_call"\s*:\s*\{[\s\S]*?\}\s*\}')
@@ -248,6 +237,10 @@ class ToolAwareAgent:
                 # For successful tool calls, especially plots, suggest stopping
                 if name in ["plot_column", "plot_correlation_matrix"]:
                     context_msg += f"Plot created successfully. You have enough data to answer. Return null/empty."
+                elif name == "correlation_matrix":
+                    context_msg += f"Correlation data retrieved. You have enough data to answer questions about correlations. Return null/empty."
+                elif name == "group_by_stats":
+                    context_msg += f"Grouped statistics retrieved. You have enough data to answer. Return null/empty."
                 else:
                     context_msg += f"Do you need more information? If you have enough data, return null/empty."
             
@@ -271,23 +264,30 @@ class ToolAwareAgent:
                 for tr in all_tool_results
             ])
             
-            tool_result_text = f"""{combined_summary}
+            # Check if the original question was ONLY asking for a plot/visualization
+            original_question_lower = history[-1].get('content', '').lower() if history else ''
+            is_plot_only_request = any(phrase in original_question_lower for phrase in [
+                'plot', 'visualize', 'show chart', 'create graph', 'draw', 'graph', 'chart'
+            ]) and not any(phrase in original_question_lower for phrase in [
+                'analyze', 'what', 'how many', 'tell me', 'explain', 'describe', 'summary', 'overview', 'insights'
+            ])
+            
+            # Check if a plot was actually created
+            plot_created = any(tr['tool'] in ['plot_column', 'plot_correlation_matrix'] for tr in all_tool_results)
+            
+            if is_plot_only_request and plot_created:
+                tool_result_text = """A plot was created. Simply confirm: Plot created successfully."""
+            else:
+                tool_result_text = f"""{combined_summary}
 
-DETAILED DATA FROM ALL TOOLS:
+DATA FROM TOOLS:
 {combined_data}
 
-INSTRUCTIONS:
-- Use ONLY the exact data shown above from all tools. The column names, values, and statistics are the actual data from the dataset.
-- CRITICAL: Use the exact numbers from the tool results. If summary_stats shows max=148694, use that exact value, not a different number.
-- If you see 0 rows or empty data in one tool result, check other tool results - they may have the actual data.
-- Answer ONLY what was asked - be concise and relevant.
-- For 'facts' or 'overview' questions, provide analytical insights (averages, most common, highest/lowest).
-- DO NOT mention correlation analysis, statistical distributions, or technical details unless specifically asked.
-- For correlation analysis: Ignore diagonal values (1.0 self-correlations). Only analyze correlations between different variables.
-- Present findings professionally without mentioning how the data was obtained.
-- If a plot was created, mention it briefly only if relevant to the question.
-- Format numbers appropriately (e.g., $148,694 instead of 148694).
-- Every fact must be backed by the exact data above."""
+Based on the tool results above, answer the user's question naturally and concisely:
+- Use the exact values shown in the tool results
+- Focus on what they asked about
+- If information isn't in the tool results, you don't have access to it
+- Be helpful and clear in your response"""
             
             followup = history + [
                 {"role": "assistant", "content": "Analyzing the data with multiple tools..."},
@@ -425,6 +425,7 @@ INSTRUCTIONS:
             
             if stats:
                 summary = f"Statistical Summary ({len(stats)} numeric column(s), {total_records:,} records):\n\n"
+                summary += "⚠️ CRITICAL: Use ONLY the exact values shown below. DO NOT round, estimate, or change these numbers.\n\n"
                 for col, values in stats.items():
                     count = values.get("count", "N/A")
                     mean = values.get("mean", "N/A")
@@ -434,23 +435,23 @@ INSTRUCTIONS:
                     
                     summary += f"{col}:\n"
                     summary += f"  • Count: {count:,}\n"
-                    # Format numbers properly - preserve exact values
+                    # Format numbers properly - preserve exact values, show both formatted and raw
                     if isinstance(mean, (int, float)):
-                        summary += f"  • Mean: {mean:,.2f}\n"
+                        summary += f"  • Mean: {mean:,.2f} (exact: {mean})\n"
                     else:
                         summary += f"  • Mean: {mean}\n"
                     if isinstance(std, (int, float)):
-                        summary += f"  • Std: {std:,.2f}\n"
+                        summary += f"  • Std: {std:,.2f} (exact: {std})\n"
                     else:
                         summary += f"  • Std: {std}\n"
                     if isinstance(min_val, (int, float)):
-                        summary += f"  • Min: {min_val:,.2f}\n"
+                        summary += f"  • Min: {min_val:,.2f} (EXACT: {min_val}) ⚠️ USE THIS EXACT NUMBER\n"
                     else:
-                        summary += f"  • Min: {min_val}\n"
+                        summary += f"  • Min: {min_val} ⚠️ USE THIS EXACT NUMBER\n"
                     if isinstance(max_val, (int, float)):
-                        summary += f"  • Max: {max_val:,.2f} (EXACT VALUE - use this number)\n"
+                        summary += f"  • Max: {max_val:,.2f} (EXACT: {max_val}) ⚠️ USE THIS EXACT NUMBER - DO NOT USE ANY OTHER VALUE\n"
                     else:
-                        summary += f"  • Max: {max_val}\n"
+                        summary += f"  • Max: {max_val} ⚠️ USE THIS EXACT NUMBER - DO NOT USE ANY OTHER VALUE\n"
                     summary += "\n"
                 
                 if insights:
@@ -480,9 +481,11 @@ INSTRUCTIONS:
                     summary_text += f"  • IQR: {num.get('iqr', 'N/A'):,.2f}\n"
                 
                 if "top_values" in summary:
-                    summary_text += f"\nMost Common Values:\n"
+                    summary_text += f"\n⚠️ Most Common Values (EXACT COUNTS - use these exact numbers):\n"
                     for item in summary["top_values"][:5]:
-                        summary_text += f"  • {item['value']}: {item['count']:,} times ({item.get('percentage', 0):.1f}%)\n"
+                        exact_count = item['count']
+                        summary_text += f"  • {item['value']}: {exact_count} times (EXACT COUNT: {exact_count}) ({item.get('percentage', 0):.1f}%)\n"
+                    summary_text += f"⚠️ CRITICAL: Use ONLY these exact counts. If it shows Denver: 11, use 11 (not 6, not any other number).\n"
                 
                 if "insights" in summary:
                     insights = summary["insights"]
@@ -494,6 +497,17 @@ INSTRUCTIONS:
             return "No summary available."
         
         elif tool_name == "plot_column":
+            # Check for errors first
+            if "error" in result:
+                error_msg = result.get("error", "Unknown error")
+                column = result.get("column", "unknown")
+                kind = result.get("kind", "unknown")
+                y = result.get("y")
+                if y:
+                    return f"❌ Plot generation failed for {column} vs {y} ({kind}): {error_msg}"
+                else:
+                    return f"❌ Plot generation failed for {column} ({kind}): {error_msg}"
+            
             # Extract path from various possible structures
             path = result.get("path")
             if not path and "structuredContent" in result:
@@ -510,20 +524,52 @@ INSTRUCTIONS:
             if path:
                 column = result.get("column", "the column")
                 kind = result.get("kind", "visualization")
-                return f"✅ Visualization created successfully!\n  • Saved to: {path}\n  • Plot type: {kind}\n  • Column: {column}\n  • The plot shows the distribution/pattern of {column}."
-            return "Plot generation failed or no path returned."
+                y = result.get("y")
+                if y and kind == "scatter":
+                    return f"✅ Scatter plot created successfully!\n  • Saved to: {path}\n  • Plot type: {kind}\n  • X-axis: {column}\n  • Y-axis: {y}"
+                else:
+                    return f"✅ Visualization created successfully!\n  • Saved to: {path}\n  • Plot type: {kind}\n  • Column: {column}"
+            return "❌ Plot generation failed: No path returned from tool."
         
         elif tool_name == "correlation_matrix":
+            if "error" in result:
+                return f"Error: {result.get('error')}"
+            
             matrix = result.get("matrix", {})
             if matrix:
                 cols = result.get("columns", [])
                 method = result.get("method", "pearson")
                 strong_corrs = result.get("strong_correlations", [])
-                text = f"Correlation matrix ({method}) for {len(cols)} numeric columns:\n"
+                
+                text = f"Correlation Analysis ({method} method):\n"
+                text += f"  • Analyzed {len(cols)} numeric columns: {', '.join(cols)}\n\n"
+                
+                # Show all correlations sorted by absolute value
+                all_corrs = []
+                for i, col1 in enumerate(cols):
+                    for j, col2 in enumerate(cols):
+                        if i != j and col1 in matrix and col2 in matrix[col1]:
+                            corr_val = matrix[col1][col2]
+                            all_corrs.append({
+                                "var1": col1,
+                                "var2": col2,
+                                "value": corr_val
+                            })
+                
+                # Sort by absolute correlation value
+                all_corrs.sort(key=lambda x: abs(x["value"]), reverse=True)
+                
+                if all_corrs:
+                    text += "Top Correlations:\n"
+                    for corr in all_corrs[:10]:  # Show top 10
+                        strength = "strong" if abs(corr["value"]) >= 0.7 else "moderate" if abs(corr["value"]) >= 0.5 else "weak"
+                        text += f"  • {corr['var1']} vs {corr['var2']}: {corr['value']:.3f} ({strength})\n"
+                
                 if strong_corrs:
-                    text += f"  • Found {len(strong_corrs)} strong correlations (threshold: {result.get('threshold', 0.5)}):\n"
-                    for corr in strong_corrs[:5]:  # Show top 5
-                        text += f"    - {corr['variable1']} vs {corr['variable2']}: {corr['correlation']:.3f} ({corr['strength']})\n"
+                    text += f"\nStrong correlations (threshold: {result.get('threshold', 0.5)}):\n"
+                    for corr in strong_corrs[:5]:
+                        text += f"  • {corr['variable1']} vs {corr['variable2']}: {corr['correlation']:.3f} ({corr['strength']})\n"
+                
                 return text
             return result.get("error", "No correlation data available.")
         
@@ -557,14 +603,17 @@ INSTRUCTIONS:
                                     "value": corr_val
                                 })
                 
-                text = f"✅ Correlation heatmap created!\n  • Saved to: {path}\n  • Shows correlation coefficients between {len(columns)} numeric columns: {', '.join(columns) if columns else 'all numeric columns'}\n"
+                text = f"✅ Correlation heatmap created!\n  • Saved to: {path}\n  • Shows correlation coefficients between {len(columns)} numeric columns: {', '.join(columns) if columns else 'all numeric columns'}\n\n"
+                
                 if non_diagonal_corrs:
                     # Sort by absolute value and show top correlations
                     non_diagonal_corrs.sort(key=lambda x: abs(x["value"]), reverse=True)
-                    text += "  • Key correlations (excluding self-correlations):\n"
-                    for corr in non_diagonal_corrs[:3]:  # Show top 3
-                        text += f"    - {corr['col1']} vs {corr['col2']}: {corr['value']:.3f}\n"
-                text += "  • All correlation values are displayed in the heatmap matrix (diagonal values of 1.0 are self-correlations and can be ignored)."
+                    text += "Top Correlations (from the matrix):\n"
+                    for corr in non_diagonal_corrs[:10]:  # Show top 10
+                        strength = "strong" if abs(corr["value"]) >= 0.7 else "moderate" if abs(corr["value"]) >= 0.5 else "weak"
+                        text += f"  • {corr['col1']} vs {corr['col2']}: {corr['value']:.3f} ({strength})\n"
+                
+                text += "\nNote: All correlation values are in the heatmap. Diagonal values (1.0) are self-correlations."
                 return text
             return "Correlation matrix plot generation failed."
         
@@ -592,11 +641,20 @@ INSTRUCTIONS:
         elif tool_name == "group_by_stats":
             group_by = result.get("group_by", "N/A")
             column = result.get("column", "N/A")
-            stats = result.get("stats", {})
-            if stats:
-                text = f"Statistics for {column} grouped by {group_by}:\n"
-                for group, values in list(stats.items())[:5]:  # Show top 5 groups
-                    text += f"  • {group}: {values}\n"
+            groups = result.get("groups", {})
+            if groups:
+                text = f"Statistics for {column} grouped by {group_by}:\n\n"
+                # Sort by mean (or max) to show highest values first
+                sorted_groups = sorted(groups.items(), key=lambda x: x[1].get('mean', 0), reverse=True)
+                for group_name, stats in sorted_groups:
+                    mean_val = stats.get('mean', 0)
+                    count = stats.get('count', 0)
+                    min_val = stats.get('min', 0)
+                    max_val = stats.get('max', 0)
+                    text += f"  • {group_name}:\n"
+                    text += f"    - Count: {count}\n"
+                    text += f"    - Average: {mean_val:,.2f}\n"
+                    text += f"    - Range: {min_val:,.2f} to {max_val:,.2f}\n\n"
                 return text
             return "No grouped statistics available."
         
