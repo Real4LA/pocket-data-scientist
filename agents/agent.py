@@ -75,7 +75,8 @@ SYSTEM_CHAT = (
     "- Answer ONLY what was asked - stay relevant\n"
     "- If data isn't in tool results, you don't have that information\n"
     "- For plots: Simply confirm 'Plot created successfully'\n"
-    "- Format numbers clearly (e.g., $149,724)\n"
+    "- Format numbers clearly (e.g., 149,724 USD instead of $149,724)\n"
+    "- CRITICAL: Replace ALL dollar signs ($) with 'USD' (e.g., '149,724 USD' not '$149,724')\n"
     "- Use plain text only - no markdown\n"
     "- Be concise and natural\n\n"
     "For general conversation: Be friendly and helpful. Explain you can analyze datasets."
@@ -439,23 +440,31 @@ class ToolAwareAgent:
 
 DATA: {combined_data}
 
-Correlation matrix plot created. Answer concisely - mention plot created and top correlations if available."""
+Correlation matrix plot created. Answer concisely - mention plot created and top correlations if available.
+CRITICAL: Replace ALL dollar signs ($) with 'USD' in your response (e.g., '149,724 USD' not '$149,724')."""
             else:
                 tool_result_text = f"""{combined_summary}
 
 DATA: {combined_data}
 
-Answer the question using exact values from tool results. Be concise and relevant."""
+Answer the question using exact values from tool results. Be concise and relevant.
+CRITICAL: Replace ALL dollar signs ($) with 'USD' in your response (e.g., '149,724 USD' not '$149,724')."""
             
             followup = history + [
                 {"role": "assistant", "content": "Analyzing the data with multiple tools..."},
                 {"role": "user", "content": tool_result_text},
             ]
             answer = self._chat([{"role": "system", "content": SYSTEM_CHAT}] + followup, temperature=0.2)
+            # Replace any dollar signs with USD for consistent formatting
+            # Replace $X with X USD (e.g., $149,724 -> 149,724 USD)
+            answer = re.sub(r'\$([\d,]+\.?\d*)', r'\1 USD', answer)
             yield {"type": "assistant_text", "content": answer}
         else:
             # Fallback if no tools were called
             answer = self._chat([{"role": "system", "content": SYSTEM_CHAT}] + history, temperature=0.2)
+            # Replace any dollar signs with USD for consistent formatting
+            # Replace $X with X USD (e.g., $149,724 -> 149,724 USD)
+            answer = re.sub(r'\$([\d,]+\.?\d*)', r'\1 USD', answer)
             yield {"type": "assistant_text", "content": answer}
     
     def _extract_actual_data(self, result: Any) -> dict:
