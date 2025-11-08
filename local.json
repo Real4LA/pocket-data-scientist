@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dataset-inspector": {
+      "command": "python",
+      "args": ["core/server_mcp.py"]
+    }
+  }
+}
