@@ -243,7 +243,6 @@ Any Ollama model that supports chat completions. Recommended:
 ## 📝 Project Structure
 
 ```
-dataset-inspector-mcp/
 ├── agents/
 │   ├── __init__.py
 │   └── agent.py              # AI agent with prompt engineering
@@ -267,7 +266,7 @@ dataset-inspector-mcp/
 ## 🔒 Data Privacy
 
 - All data processing happens locally on your machine
-- No data is sent to external servers (except Ollama API calls)
+- No data is sent to external servers
 - Uploaded files are stored in the `uploads/` directory
 - Generated plots are saved in the `plots/` directory
 
