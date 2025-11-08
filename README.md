@@ -35,7 +35,6 @@ Watch the demo video on YouTube to see Pocket Data Scientist in action: [YouTube
 ### 🎨 User Interface
 
 - **Modern Streamlit UI**: Clean, intuitive interface with sidebar controls
-- **Fixed Input Field**: Chat input always accessible at the bottom
 - **Tabbed Interface**: Separate tabs for Chat and Data Viewer
 - **Real-time Updates**: See results as they're generated
 - **Tool Usage Tracking**: Expandable section showing all tool calls and results
@@ -54,7 +53,6 @@ Watch the demo video on YouTube to see Pocket Data Scientist in action: [YouTube
 
    ```bash
    git clone https://github.com/Real4LA/pocket-data-scientist
-   cd dataset-inspector-mcp
    ```
 
 2. **Install dependencies**
