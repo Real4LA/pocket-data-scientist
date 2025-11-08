@@ -110,8 +110,10 @@ def plot_correlation_matrix() -> dict:
             "matrix": corr_data.get("matrix", {}),
             "note": "Correlation matrix visualization created. All correlation values are displayed in the heatmap."
         }
-    except (RuntimeError, ValueError) as e:
-        return {"error": str(e), "path": None}
+    except Exception as e:
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        return {"error": error_msg, "path": None, "traceback": traceback.format_exc()}
 
 @mcp.tool()
 def compare_columns(column1: str, column2: str) -> dict:

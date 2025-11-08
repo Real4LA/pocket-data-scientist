@@ -3,60 +3,129 @@ import re
 import requests
 from typing import Dict, Iterable, Any
 
-# Simplified, less rigid system prompt
+# Optimized system prompt for tool selection
 SYSTEM_DECIDE = (
-    "You are a data analyst. Use the available tools to answer questions about the dataset.\n\n"
-    "Available tools:\n"
-    "- list_columns(): Get column names and types\n"
+    "You are a data analyst assistant. Help with data analysis questions about the dataset.\n\n"
+    "AVAILABLE TOOLS:\n"
+    "Data exploration:\n"
+    "- list_columns(): Get column names and types (REQUIRED before tools needing column names)\n"
     "- get_data_overview(): Dataset overview\n"
-    "- summary_stats(): Statistics for numeric columns\n"
-    "- get_column_summary(column='Name'): Details about a specific column (shows top values for categorical columns)\n"
-    "- group_by_stats(group_by='Category', column='Numeric'): Get statistics grouped by category (e.g., average salary by job title)\n"
-    "- correlation_matrix(): Get correlation between all numeric columns\n"
-    "- plot_correlation_matrix(): Create correlation heatmap\n"
-    "- plot_column(column='X', kind='scatter', y='Y'): Create scatter plot for 'X vs Y'\n"
-    "- plot_column(column='X', kind='bar'): Create bar chart for category counts\n"
-    "- plot_column(column='X', kind='hist'): Create histogram for numeric distributions\n"
+    "- summary_stats(): Statistics for all numeric columns\n"
     "\n"
-    "When to use each tool:\n"
-    "- Questions about 'highest paying job', 'average salary by job', 'salary by category' → group_by_stats(group_by='Job_Title', column='Salary_USD')\n"
-    "- Questions about 'correlation', 'correlated features', 'top correlated', 'most contributing factor' → correlation_matrix() (call this to get correlation data)\n"
-    "- Questions about 'plot correlation' or 'visualize correlation' → plot_correlation_matrix() (creates plot AND provides correlation data)\n"
-    "- Questions about 'most common X' or 'top X values' → get_column_summary(column='X')\n"
-    "- Questions about 'plot X vs Y' → plot_column(column='X', kind='scatter', y='Y')\n"
+    "Column-specific analysis (REQUIRES list_columns() first):\n"
+    "- get_column_summary(column='Name'): Column details and top values\n"
+    "- group_by_stats(group_by='Category', column='Numeric'): Statistics grouped by category\n"
+    "- plot_column(column='X', kind='scatter', y='Y'): Scatter plot for X vs Y\n"
+    "- plot_column(column='X', kind='bar'): Bar chart for category counts\n"
+    "- plot_column(column='X', kind='hist'): Histogram for distributions\n"
     "\n"
-    "Important: If user asks about correlations but doesn't ask for a plot, call correlation_matrix() to get the data."
+    "Correlation analysis:\n"
+    "- correlation_matrix(): Correlation data (text only)\n"
+    "- plot_correlation_matrix(): Correlation heatmap (all correlations)\n"
     "\n"
-    "When you have enough information to answer, return null.\n"
-    "Output JSON: {\"tool_call\":{\"name\":\"tool_name\",\"args\":{...}}} or null"
+    "TOOL SELECTION RULES:\n"
+    "1. Column name tools: get_column_summary(), plot_column(), group_by_stats() MUST be preceded by list_columns()\n"
+    "2. Use EXACT column names from list_columns() result (case-sensitive)\n"
+    "\n"
+    "EXAMPLES OF PROPER TOOL USAGE:\n"
+    "\n"
+    "Example 1: User asks 'what is the highest paying job?'\n"
+    "Step 1: {\"tool_call\":{\"name\":\"list_columns\",\"args\":{}}}\n"
+    "Step 2: After seeing columns like 'Job_Title' and 'Salary_USD', call:\n"
+    "        {\"tool_call\":{\"name\":\"group_by_stats\",\"args\":{\"group_by\":\"Job_Title\",\"column\":\"Salary_USD\"}}}\n"
+    "\n"
+    "Example 2: User asks 'visualize the relationship between age and salary'\n"
+    "Step 1: {\"tool_call\":{\"name\":\"list_columns\",\"args\":{}}}\n"
+    "Step 2: After seeing columns like 'Age' and 'Salary_USD', call:\n"
+    "        {\"tool_call\":{\"name\":\"plot_column\",\"args\":{\"column\":\"Age\",\"kind\":\"scatter\",\"y\":\"Salary_USD\"}}}\n"
+    "\n"
+    "Example 3: User asks 'plot correlation matrix'\n"
+    "Direct call: {\"tool_call\":{\"name\":\"plot_correlation_matrix\",\"args\":{}}}\n"
+    "(No list_columns() needed - this tool works on all numeric columns)\n"
+    "\n"
+    "Example 4: User asks 'what are the most common cities?'\n"
+    "Step 1: {\"tool_call\":{\"name\":\"list_columns\",\"args\":{}}}\n"
+    "Step 2: After seeing column 'City', call:\n"
+    "        {\"tool_call\":{\"name\":\"get_column_summary\",\"args\":{\"column\":\"City\"}}}\n"
+    "\n"
+    "Example 5: User asks 'show me summary statistics'\n"
+    "Direct call: {\"tool_call\":{\"name\":\"summary_stats\",\"args\":{}}}\n"
+    "(No list_columns() needed)\n"
+    "\n"
+    "Question → Tool mapping:\n"
+    "- 'dataset overview'/'what is this data' → get_data_overview()\n"
+    "- 'summary statistics' → summary_stats()\n"
+    "- 'most common X'/'top values in X' → list_columns() then get_column_summary(column='X')\n"
+    "- 'average Y by X'/'highest Y by X' → list_columns() then group_by_stats(group_by='X', column='Y')\n"
+    "- 'plot correlation matrix'/'visualize correlation matrix' → plot_correlation_matrix()\n"
+    "- 'correlation' (no plot) → correlation_matrix()\n"
+    "- 'X vs Y'/'relationship between X and Y' with 'plot'/'visualize' → list_columns() then plot_column(column='X', kind='scatter', y='Y')\n"
+    "- 'plot X'/'visualize X' (single variable) → list_columns() then plot_column(column='X', kind='auto')\n"
+    "\n"
+    "CRITICAL: 'plot correlation matrix' = heatmap (plot_correlation_matrix). 'plot X vs Y' = scatter plot (plot_column). Never use correlation_matrix() when user asks to plot/visualize.\n"
+    "\n"
+    "For non-data questions (greetings, general chat), return null immediately.\n"
+    "Output: {\"tool_call\":{\"name\":\"tool_name\",\"args\":{...}}} or null"
 )
 
 SYSTEM_CHAT = (
-    "You are a helpful data analyst. Answer questions based on the tool results provided.\n\n"
-    "Guidelines:\n"
-    "- Use the exact values shown in the tool results\n"
-    "- Focus on what the user asked - stay relevant to their question\n"
-    "- If data isn't in the tool results, you don't have that information\n"
-    "- For plot requests, simply confirm the plot was created\n"
+    "You are a helpful data analyst assistant.\n\n"
+    "Response guidelines:\n"
+    "- Use EXACT values from tool results (no rounding, estimating, or inferring)\n"
+    "- Answer ONLY what was asked - stay relevant\n"
+    "- If data isn't in tool results, you don't have that information\n"
+    "- For plots: Simply confirm 'Plot created successfully'\n"
     "- Format numbers clearly (e.g., $149,724)\n"
-    "- Be concise and natural in your responses\n"
+    "- Use plain text only - no markdown\n"
+    "- Be concise and natural\n\n"
+    "For general conversation: Be friendly and helpful. Explain you can analyze datasets."
 )
 
 TOOLCALL_RE = re.compile(r'\{\s*"tool_call"\s*:\s*\{[\s\S]*?\}\s*\}')
 
 def _extract_tool_call(text: str):
+    if not text or not text.strip():
+        return None
+    
+    # Try parsing as JSON first
     try:
         obj = json.loads(text)
         if isinstance(obj, dict) and "tool_call" in obj:
             return obj["tool_call"]
+        # Sometimes the tool_call is at the root level
+        if isinstance(obj, dict) and "name" in obj and "args" in obj:
+            return obj
     except Exception:
         pass
+    
+    # Try regex extraction
     m = TOOLCALL_RE.search(text)
     if m:
         try:
-            return json.loads(m.group(0)).get("tool_call")
+            obj = json.loads(m.group(0))
+            if isinstance(obj, dict) and "tool_call" in obj:
+                return obj["tool_call"]
         except Exception:
-            return None
+            pass
+    
+    # Try to find JSON-like structure even if not perfect
+    try:
+        # Look for patterns like {"name": "...", "args": {...}}
+        name_match = re.search(r'"name"\s*:\s*"([^"]+)"', text)
+        if name_match:
+            name = name_match.group(1)
+            # Try to extract args
+            args_match = re.search(r'"args"\s*:\s*(\{[^}]*\})', text)
+            args = {}
+            if args_match:
+                try:
+                    args = json.loads(args_match.group(1))
+                except:
+                    pass
+            return {"name": name, "args": args}
+    except Exception:
+        pass
+    
     return None
 
 class ToolAwareAgent:
@@ -82,15 +151,31 @@ class ToolAwareAgent:
         try:
             msgs = [{"role": "system", "content": SYSTEM_DECIDE}] + history
             text = self._chat(msgs, format_json=True, temperature=0.0)
+            
+            # Check if LLM returned null (no tool call needed)
+            if text.strip().lower() in ['null', 'none', '']:
+                return None
+            
             call = _extract_tool_call(text)
             if call and isinstance(call, dict) and "name" in call:
+                # Reject if name is "null" - this means no tool call
+                if call.get("name", "").lower() in ['null', 'none']:
+                    return None
                 return call
             # Retry with more explicit instruction
             msgs.append({"role": "assistant", "content": text})
-            msgs.append({"role": "system", "content": "You must output ONLY a valid JSON object with tool_call. Example: {\"tool_call\":{\"name\":\"plot_column\",\"args\":{\"column\":\"Salary_USD\"}}}"})
+            msgs.append({"role": "system", "content": "You must output ONLY a valid JSON object with tool_call. Example: {\"tool_call\":{\"name\":\"plot_column\",\"args\":{\"column\":\"ColumnName\"}}}. If no tool is needed, output just: null"})
             text = self._chat(msgs, format_json=True, temperature=0.0)
+            
+            # Check if LLM returned null
+            if text.strip().lower() in ['null', 'none', '']:
+                return None
+            
             call = _extract_tool_call(text)
             if call and isinstance(call, dict) and "name" in call:
+                # Reject if name is "null"
+                if call.get("name", "").lower() in ['null', 'none']:
+                    return None
                 return call
         except Exception as e:
             # Log error but don't crash
@@ -179,6 +264,39 @@ class ToolAwareAgent:
             name = call.get("name", "")
             args = call.get("args", {}) or {}
             
+            # Tools that require column names - must have list_columns() called first
+            tools_requiring_columns = ["get_column_summary", "plot_column", "group_by_stats"]
+            
+            # Check if we need to call list_columns() first
+            if name in tools_requiring_columns:
+                # Check if list_columns() has been called
+                list_columns_called = any(tr["tool"] == "list_columns" for tr in all_tool_results)
+                
+                if not list_columns_called:
+                    # Force call to list_columns() first
+                    list_columns_key = ("list_columns", "{}")
+                    if list_columns_key not in called_tools:
+                        # Call list_columns() first
+                        yield {"type": "tool_call", "payload": {"name": "list_columns", "args": {}}}
+                        list_result = self._execute_tool("list_columns", {})
+                        extracted_list_result = self._extract_actual_data(list_result)
+                        yield {"type": "tool_result", "payload": extracted_list_result}
+                        all_tool_results.append({"tool": "list_columns", "result": extracted_list_result})
+                        called_tools.add(list_columns_key)
+                        
+                        # Add to history
+                        list_summary = self._summarize_tool_result("list_columns", extracted_list_result)
+                        current_history.append({
+                            "role": "assistant",
+                            "content": f"Used tool list_columns",
+                        })
+                        current_history.append({
+                            "role": "user",
+                            "content": f"Tool result: {list_summary}\n\nColumn names retrieved. Now use these EXACT column names (case-sensitive) to call the tool you were about to call: {name}. Do NOT use lowercase or guessed column names - use the exact names from the list above."
+                        })
+                        # Continue to next iteration to let LLM decide again with column names available
+                        continue
+            
             # Create a unique key for this tool call to prevent duplicates
             tool_key = (name, json.dumps(args, sort_keys=True))
             
@@ -227,22 +345,45 @@ class ToolAwareAgent:
                 elif not extracted_result or len(extracted_result) == 0:
                     needs_more = True
             
-            # Build context message - simpler and less rigid
-            context_msg = f"Tool result: {summary}\n\n"
-            context_msg += f"Question: {original_question}\n\n"
+            # Build optimized context message
+            question_lower = original_question.lower()
+            asked_for_plot = any(word in question_lower for word in ['plot', 'visualize', 'show', 'graph', 'chart'])
+            asked_for_relationship_plot = any(phrase in question_lower for phrase in ['vs', 'relationship', 'relation']) and asked_for_plot
+            asked_for_correlation_matrix_plot = 'correlation matrix' in question_lower and asked_for_plot
+            
+            context_msg = f"Tool result: {summary}\n\nQuestion: {original_question}\n\n"
             
             if needs_more:
-                context_msg += f"Data seems incomplete. Call get_data_overview() or list_columns() to verify."
-            else:
-                # For successful tool calls, especially plots, suggest stopping
-                if name in ["plot_column", "plot_correlation_matrix"]:
-                    context_msg += f"Plot created successfully. You have enough data to answer. Return null/empty."
-                elif name == "correlation_matrix":
-                    context_msg += f"Correlation data retrieved. You have enough data to answer questions about correlations. Return null/empty."
-                elif name == "group_by_stats":
-                    context_msg += f"Grouped statistics retrieved. You have enough data to answer. Return null/empty."
+                if asked_for_correlation_matrix_plot and name != "plot_correlation_matrix":
+                    context_msg += "User asked to PLOT correlation matrix. Call plot_correlation_matrix(), not correlation_matrix()."
                 else:
-                    context_msg += f"Do you need more information? If you have enough data, return null/empty."
+                    context_msg += "Data incomplete. Call get_data_overview() or list_columns() to verify."
+            elif name in ["plot_column", "plot_correlation_matrix"]:
+                plots_created = [tr for tr in all_tool_results if tr['tool'] in ['plot_column', 'plot_correlation_matrix']]
+                plot_keywords = ['scatter', 'histogram', 'bar chart', 'correlation matrix', 'visualize', 'plot']
+                plot_requests_count = sum(1 for keyword in plot_keywords if keyword in question_lower)
+                if plot_requests_count > len(plots_created):
+                    context_msg += f"Plot created. {plot_requests_count - len(plots_created)} more plot(s) needed. Continue."
+                else:
+                    context_msg += "Plot created. Return null."
+            elif name == "correlation_matrix":
+                if asked_for_correlation_matrix_plot:
+                    context_msg += "User asked to PLOT correlation matrix. Call plot_correlation_matrix() instead. Do not return null."
+                elif asked_for_relationship_plot:
+                    context_msg += "User asked to VISUALIZE relationship between two variables. Call plot_column(column='X', kind='scatter', y='Y'). Do not return null."
+                else:
+                    context_msg += "Correlation data retrieved. Return null."
+            elif name == "list_columns":
+                if asked_for_relationship_plot:
+                    context_msg += "Use EXACT column names (case-sensitive) from above to call plot_column(column='X', kind='scatter', y='Y'). Do not return null."
+                else:
+                    context_msg += "Use EXACT column names (case-sensitive) from above to call the appropriate tool. Return null only after calling needed tools."
+            elif name in ["group_by_stats", "get_column_summary"]:
+                context_msg += "Data retrieved. Return null."
+            elif name == "get_data_overview":
+                context_msg += "Overview retrieved. Review question - call more tools if needed. Return null only if you have all data."
+            else:
+                context_msg += "Review question - call more tools if needed. Return null only if you have all data."
             
             current_history.append({
                 "role": "user",
@@ -250,6 +391,19 @@ class ToolAwareAgent:
             })
         
         # 3) Generate final answer based on all tool results
+        # If no tools were called, generate a natural conversational response
+        if not all_tool_results:
+            # No tools called - this is likely a general conversation question
+            # Generate a friendly, conversational response
+            original_question = history[-1].get('content', '') if history else ''
+            followup = history + [
+                {"role": "user", "content": f"User said: {original_question}\n\nRespond naturally and conversationally. Be friendly and helpful. If they're asking what you can do, explain that you can help analyze datasets."}
+            ]
+            msgs = [{"role": "system", "content": SYSTEM_CHAT}] + followup
+            final_text = self._chat(msgs, temperature=0.7)  # Higher temperature for more natural conversation
+            yield {"type": "assistant_text", "content": final_text}
+            return
+        
         if all_tool_results:
             # Combine all tool results into a comprehensive summary
             combined_summary = "DATA ANALYSIS RESULTS FROM ALL TOOLS:\n\n"
@@ -275,19 +429,23 @@ class ToolAwareAgent:
             # Check if a plot was actually created
             plot_created = any(tr['tool'] in ['plot_column', 'plot_correlation_matrix'] for tr in all_tool_results)
             
-            if is_plot_only_request and plot_created:
-                tool_result_text = """A plot was created. Simply confirm: Plot created successfully."""
+            # Special handling for correlation matrix plots - they should show the plot even if it's a plot-only request
+            correlation_plot_created = any(tr['tool'] == 'plot_correlation_matrix' for tr in all_tool_results)
+            
+            if is_plot_only_request and plot_created and not correlation_plot_created:
+                tool_result_text = "Plot created. Respond: 'Plot created successfully.'"
+            elif correlation_plot_created:
+                tool_result_text = f"""{combined_summary}
+
+DATA: {combined_data}
+
+Correlation matrix plot created. Answer concisely - mention plot created and top correlations if available."""
             else:
                 tool_result_text = f"""{combined_summary}
 
-DATA FROM TOOLS:
-{combined_data}
+DATA: {combined_data}
 
-Based on the tool results above, answer the user's question naturally and concisely:
-- Use the exact values shown in the tool results
-- Focus on what they asked about
-- If information isn't in the tool results, you don't have access to it
-- Be helpful and clear in your response"""
+Answer the question using exact values from tool results. Be concise and relevant."""
             
             followup = history + [
                 {"role": "assistant", "content": "Analyzing the data with multiple tools..."},

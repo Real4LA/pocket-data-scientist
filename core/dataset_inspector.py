@@ -252,7 +252,11 @@ class DatasetInspector:
         if numeric_df.empty or len(numeric_df.columns) < 2:
             raise ValueError("Need at least 2 numeric columns for correlation matrix")
         
-        import seaborn as sns
+        try:
+            import seaborn as sns
+        except ImportError:
+            raise ImportError("seaborn is required for correlation matrix plots. Install with: pip install seaborn")
+        
         corr_matrix = numeric_df.corr()
         
         plt.figure(figsize=(10, 8))
@@ -265,8 +269,18 @@ class DatasetInspector:
         plots_dir.mkdir(exist_ok=True)
         suffix = f"_{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         out_path = plots_dir / f"correlation_matrix{suffix}.png"
-        plt.savefig(out_path, dpi=150, bbox_inches='tight')
-        plt.close()
+        
+        try:
+            plt.savefig(out_path, dpi=150, bbox_inches='tight')
+            plt.close()
+        except Exception as e:
+            plt.close()
+            raise RuntimeError(f"Failed to save correlation matrix plot: {str(e)}")
+        
+        # Verify file was created
+        if not out_path.exists():
+            raise RuntimeError(f"Plot file was not created at {out_path}")
+        
         # Return relative path from project root for portability
         rel_path = out_path.relative_to(self.project_root)
         return str(rel_path.as_posix())  # Use forward slashes for cross-platform compatibility

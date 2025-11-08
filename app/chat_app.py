@@ -193,7 +193,7 @@ for i, m in enumerate(st.session_state.messages):
                             pass
         
         # User and assistant messages show as markdown
-        st.markdown(m.get("content", ""))
+        st.write(m.get("content", ""))
 
 # ----------------------- Input box --------------------------
 user_input = st.chat_input(
@@ -218,7 +218,7 @@ if user_input:
         
         # Display user message
         with st.chat_message("user"):
-            st.markdown(user_input)
+            st.write(user_input)
         
         # Now process with agent
         with st.chat_message("assistant"):
@@ -429,7 +429,7 @@ if user_input:
             # Display assistant's natural language response (this is the main output)
             if assistant_texts:
                 for chunk in assistant_texts:
-                    st.markdown(chunk["content"])
+                    st.write(chunk["content"])
                     # Store assistant message with only the last plot path for persistence
                     assistant_msg = {
                         "role": "assistant",
